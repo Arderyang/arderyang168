@@ -1,151 +1,168 @@
+from datetime import datetime
+import sqlite3
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
-
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
 
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+# --- 1. 資料庫初始化設定 ---
+def init_db():
+  conn = sqlite3.connect("orders.db")
+  c = conn.cursor()
+  c.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_time TEXT,
+            order_type TEXT,
+            table_no TEXT,
+            main_dish TEXT,
+            customization TEXT,
+            sides TEXT,
+            extras TEXT
         )
+    """)
+  conn.commit()
+  conn.close()
+
+
+# 寫入訂單至資料庫
+def save_order(
+    order_type, table_no, main_dish, customization, sides, extras
+):
+  conn = sqlite3.connect("orders.db")
+  c = conn.cursor()
+  order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  c.execute(
+      """
+        INSERT INTO orders (order_time, order_type, table_no, main_dish, customization, sides, extras)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """,
+      (
+          order_time,
+          order_type,
+          table_no,
+          main_dish,
+          customization,
+          ", ".join(sides),
+          ", ".join(extras) if extras else "無",
+      ),
+  )
+  conn.commit()
+  conn.close()
+
+
+init_db()
+
+# --- 2. 前端介面設計 ---
+st.title("🔥 鄉村火雞肉飯 - 智慧點餐與管理系統")
+
+# 設計分頁：前台點餐 vs 後台訂單管理
+tab1, tab2 = st.tabs(["📱 顧客點餐系統", "👨‍🍳 櫃檯訂單後台"])
+
+with tab1:
+  st.subheader("📝 請填寫您的點餐內容")
+
+  # 用餐方式
+  order_type = st.radio("請選擇用餐方式：", ["內用", "外帶"], horizontal=True)
+  table_no = ""
+  if order_type == "內用":
+    table_no = st.text_input("請輸入桌號：")
+  else:
+    table_no = "外帶"
+
+  st.divider()
+
+  # 主餐與客製化
+  st.subheader("🍱 主餐與客製化設定")
+  main_dish = st.selectbox(
+      "選擇主餐：",
+      ["經典火雞肉便當 (絲)", "經典火雞肉便當 (片)", "雙拼便當", "特製火雞翅便當"],
+  )
+
+  col1, col2 = st.columns(2)
+  with col1:
+    oil_pref = st.radio("雞油/醬汁多寡：", ["正常", "偏多", "偏少"], horizontal=True)
+  with col2:
+    pepper_pref = st.radio("胡椒粉：", ["加胡椒", "不加胡椒"], horizontal=True)
+
+  no_cilantro = st.checkbox("不要香菜")
+  no_shallots = st.checkbox("不要油蔥酥")
+
+  st.divider()
+
+  # 配菜多選 (限制選 2 項)
+  st.subheader("🥬 配菜區（請任選 2 項）")
+  sides = ["蒜炒高麗菜", "時令青菜", "滷豆腐", "筍絲", "菜脯蛋", "油豆腐"]
+  selected_sides = []
+
+  for side in sides:
+    if st.checkbox(side, key=f"side_{side}"):
+      selected_sides.append(side)
+
+  st.divider()
+
+  # 單點小吃與湯品
+  st.subheader("🍢 加點小吃與湯品（可複選）")
+  extras = [
+      "招牌火雞肉切盤",
+      "燙青菜",
+      "黃金半熟蛋",
+      "虱目魚丸湯",
+      "蛤蜊排骨湯",
+      "味噌湯",
+  ]
+  selected_extras = [
+      item for item in extras if st.checkbox(item, key=f"extra_{item}")
+  ]
+
+  st.divider()
+
+  # 送出訂單與驗證
+  if st.button("確認送出訂單", type="primary"):
+    if len(selected_sides) != 2:
+      st.error(
+          f"⚠️️ 配菜必須剛好選擇 2 項！您目前選了 {len(selected_sides)} 項。"
+      )
+    elif order_type == "內用" and not table_no.strip():
+      st.error("⚠️ 內用請務必輸入桌號！")
+    else:
+      # 組合備註
+      customizations = [f"雞油:{oil_pref}", pepper_pref]
+      if no_cilantro:
+        customizations.append("不要香菜")
+      if no_shallots:
+        customizations.append("不要油蔥酥")
+      custom_str = ", ".join(customizations)
+
+      # 儲存至資料庫
+      save_order(
+          order_type,
+          table_no,
+          main_dish,
+          custom_str,
+          selected_sides,
+          selected_extras,
+      )
+
+      st.success("✅ 點餐成功！廚房已收到您的訂單。")
+      st.info(
+          f"**明細**：{order_type} "
+          + (f"(桌號: {table_no})" if order_type == "內用" else "")
+          + f" | {main_dish} | 配菜：{', '.join(selected_sides)}"
+      )
+
+with tab2:
+  st.subheader("📋 歷史訂單總覽")
+  if st.button("重新整理訂單列表"):
+    st.rerun()
+
+  conn = sqlite3.connect("orders.db")
+  import pandas as pd
+
+  df = pd.read_sql_query(
+      "SELECT * FROM orders ORDER BY id DESC", conn
+  )
+  conn.close()
+
+  if not df.empty:
+    st.dataframe(df, use_container_width=True)
+  else:
+    st.info("目前尚無任何訂單紀錄。")
