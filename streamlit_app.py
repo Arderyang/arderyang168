@@ -3,12 +3,13 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
-# --- 1. 資料庫初始化設定 ---
+# --- 1. 資料庫初始化與結構檢查（自動補補丁） ---
 
 
 def init_db():
   conn = sqlite3.connect("orders.db")
   c = conn.cursor()
+  # 建立基礎資料表
   c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,6 +23,13 @@ def init_db():
             status TEXT DEFAULT '新訂單'
         )
     """)
+
+  # 檢查舊資料庫是否缺少 status 欄位（防呆機制，避免 KeyError）
+  c.execute("PRAGMA table_info(orders)")
+  columns = [col[1] for col in c.fetchall()]
+  if "status" not in columns:
+    c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT '新訂單'")
+
   conn.commit()
   conn.close()
 
@@ -115,8 +123,8 @@ if app_mode == "📱 顧客線上點餐":
       order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       c.execute(
           """
-                INSERT INTO orders (order_time, order_type, table_no, main_dish, customization, sides, extras)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO orders (order_time, order_type, table_no, main_dish, customization, sides, extras, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, '新訂單')
             """,
           (
               order_time,
@@ -137,7 +145,7 @@ if app_mode == "📱 顧客線上點餐":
 elif app_mode == "👨‍🍳 商家管理後台":
   st.title("👨‍🍳 商家管理後台")
 
-  # 簡單的密碼保護機制（預設密碼設為 1234，您可以自行更改）
+  # 管理員密碼設定 (預設 1234)
   password = st.text_input("請輸入管理員密碼：", type="password")
 
   if password == "1234":
@@ -170,11 +178,12 @@ elif app_mode == "👨‍🍳 商家管理後台":
       st.subheader("📋 即時訂單管理")
 
       for index, row in df.iterrows():
+        current_status = row["status"] if pd.notna(row["status"]) else "新訂單"
         status_color = (
             "🔴"
-            if row["status"] == "新訂單"
+            if current_status == "新訂單"
             else "🟡"
-            if row["status"] == "製作中"
+            if current_status == "製作中"
             else "🟢"
         )
 
@@ -191,10 +200,14 @@ elif app_mode == "👨‍🍳 商家管理後台":
             st.write(f"**加點小吃/湯品**：{row['extras']}")
 
           st.markdown("---")
+          
+          status_options = ["新訂單", "製作中", "已完成"]
+          safe_index = status_options.index(current_status) if current_status in status_options else 0
+          
           new_status = st.radio(
               f"更改訂單 #{row['id']} 狀態：",
-              ["新訂單", "製作中", "已完成"],
-              index=["新訂單", "製作中", "已完成"].index(row["status"]),
+              status_options,
+              index=safe_index,
               horizontal=True,
               key=f"status_radio_{row['id']}",
           )
@@ -212,7 +225,6 @@ elif app_mode == "👨‍🍳 商家管理後台":
             st.rerun()
 
       st.divider()
-      # 完整資料表格檢視
       with st.expander("查看完整資料庫表格 (Raw Data)"):
         st.dataframe(df, use_container_width=True)
 
